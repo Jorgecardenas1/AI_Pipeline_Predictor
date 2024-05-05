@@ -84,9 +84,11 @@ def arguments():
     parser.add_argument("gpu_number",type=int)
     parser.add_argument("device",type=str)
     parser.add_argument("learning_rate",type=float)
-    parser.add_argument("condition_len",type=float) #This defines the length of our conditioning vector
-    parser.add_argument("metricType",type=float) #This defines the length of our conditioning vector
-    parser.add_argument("cond_channel",type=float) #This defines the length of our conditioning vector
+    parser.add_argument("condition_len",type=int) #This defines the length of our conditioning vector
+    parser.add_argument("metricType",type=str) #This defines the length of our conditioning vector
+    parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
+    parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
+    parser.add_argument("resnet_arch",type=str) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
     parser.epochs = 100
@@ -100,6 +102,7 @@ def arguments():
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
     parser.condition_len=6 #this is to be modified when training for different metrics.
+    parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
 
     categories=["box", "circle", "cross"]
 
@@ -117,7 +120,7 @@ def join_simulationData():
 # Load Model
 
 def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_size=601):
-    model = Stack.Predictor_RESNET(conditional=True, cond_input_size=parser.condition_len, 
+    model = Stack.Predictor_RESNET(parser.resnet_arch,conditional=True, cond_input_size=parser.condition_len, 
                                    cond_channels=parser.cond_channel, 
                                 ngpu=1, image_size=parser.image_size ,
                                 output_size=8, channels=3,
@@ -627,7 +630,7 @@ def main():
     Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
 
 
-    date="_RESNET_Bands_2May_2e-5_50epc_h1000_f1000_64_MSE_MAXVAL_arrayCond_1TOP1Freq"
+    date="_RESNET_Bands_5May_2e-5_50epc_h1000_f1000_128_MSE_MAXVAL_arrayCond_1TOP1Freq"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,
