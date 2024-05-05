@@ -65,8 +65,8 @@ torch.backends.cudnn.benchmark = False
 
 parser = argparse.ArgumentParser()
 
-#boxImagesPath="../../../data/MetasufacesData/Images-512-Bands/"
-boxImagesPath="../../../data/MetasufacesData/Images-512-Suband/"
+boxImagesPath="../../../data/MetasufacesData/Images-512-Bands/"
+#boxImagesPath="../../../data/MetasufacesData/Images-512-Suband/"
 DataPath="../../../data/MetasufacesData/Exports/output/"
 simulationData="../../../data/MetasufacesData/DBfiles/"
 validationImages="../../../data/MetasufacesData/testImages/"
@@ -95,19 +95,21 @@ def arguments():
     parser.add_argument("metricType",type=float) #This defines the length of our conditioning vector
     parser.add_argument("patch_size",type=int)
     parser.add_argument("image_size",type=int)
+    parser.add_argument("regression",type=int)
 
     parser.run_name = "Predictor Training"
     parser.epochs = 10
-    parser.batch_size = 100
+    parser.batch_size = 50
     parser.workers=1
     parser.gpu_number=1
     parser.image_size = 128
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     parser.learning_rate = 1e-4
-    parser.condition_len = 768
+    parser.condition_len = 5
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.patch_size=16
+    parser.regression=True
 
 
     model_kwargs={
@@ -124,7 +126,9 @@ def arguments():
             "dropout": 0.2,
             "image_size":parser.image_size,
             "conditionalIn":True,
-            "conditionalLen":768
+            "conditionalLen":5,
+            "regression":parser.regression
+
         }
 
 
@@ -209,19 +213,42 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
             for name in glob.glob(DataPath+batch+'/files/'+'/'+parser.metricType+'*'+series+'.csv'): 
                 #loading the absorption data
                 train = pd.read_csv(name)
+                # the band is divided in chunks 
+                if Bands[str(band_name)]==0:
 
-    
-                train=train.loc[401:500]
+                    train=train.loc[1:100]
 
+                elif Bands[str(band_name)]==1:
+
+                    train=train.loc[101:200]
+                    
+                elif Bands[str(band_name)]==2:
+
+                    train=train.loc[201:300]
+
+                elif Bands[str(band_name)]==3:
+                    train=train.loc[301:400]
+
+                elif Bands[str(band_name)]==4:
+
+                    train=train.loc[401:500]
+
+                elif Bands[str(band_name)]==5:
+
+                    train=train.loc[501:600]
+                
+                
                 values=np.array(train.values.T)
+
+
                 values=np.around(values, decimals=2, out=None)
 
                 max_val = np.max(values[1])
                 max_indx = np.argmax(values[1])
                 all_frequencies=values[0]
 
-                a.append([max_val,all_frequencies[max_indx]])
-                bands_batch.append(band_name)
+                a.append([max_val,max_indx/100])
+                bands_batch.append(Bands[band_name])
 
                 #Creating the batch of maximum frequencies
 
@@ -230,14 +257,15 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         """Creating a conditioning vector"""
         
         conditioningArray, embedded=set_conditioning(bands_batch,all_frequencies,classes, names, classes_types,clipEmbedder,df,device)
+        
         #print(embedded)
         #embedded=embedded.view(parser.batch_size,parser.condition_len)
-        embedded = embedded.mean(1)
+        #embedded = embedded.mean(1)
 
         """showing embedding image"""
 
-        # plot =  embedded.clone().detach().cpu()
-        # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*3, bias=True)           
+        # plot =  conditioningArray.clone().detach().cpu()
+        # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*3, bias=False)           
         # x2 = l1(plot) #Size must be taken care = 800 in this case
         # x2 = x2.reshape(int(parser.batch_size),3,parser.image_size,parser.image_size)
         # x2 = torchvision.transforms.Normalize([0.1, ], [.1 ],[0.4,])(x2)
@@ -245,7 +273,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         # save_image(inputs[0], str(i)+'_image.png')
 
 
-        y_predicted = model(inputs,condition=embedded.to(device))
+        y_predicted = model(inputs,condition=conditioningArray.to(device))
         y_predicted=y_predicted.to(device)
                                     
         y_truth = torch.tensor(a).to(device)
@@ -287,7 +315,11 @@ def train(model,device, PATH):
 
     """using weigth decay regularization"""
     opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.9, 0.999),weight_decay=1e-2)
-    criterion = nn.MSELoss()
+    if parser.regression:
+        criterion = nn.MSELoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
+        
     Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.95)
@@ -323,14 +355,6 @@ def train(model,device, PATH):
         # statistics for batch normalization.
         torch.save(model.state_dict(), PATH)
 
-        #model.eval()
-
-        # with torch.no_grad():
-            
-        #     i_val,running_vloss,acc_validation,score_val = epoch_validate(epoch,model,vdataloader,device,opt,criterion,score_metric,clipEmbedder,df)
-        #     valid_loss_list.append(running_vloss/i_val)
-        #     acc_val.append(acc_validation)
-
     
     return loss_values,acc,valid_loss_list,acc_val,score_train
 
@@ -365,10 +389,11 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 
            
 # Conditioning
-def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df,device):
+def set_conditioning(bands_batch,freq_val,target,path,categories,Embedder,df,device):
     
     arr=[]
     values_array=[]
+    intermediate_array=[]
     for idx,name in enumerate(path):
 
         series=name.split('_')[-2]
@@ -380,7 +405,7 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
 
         target_val=target[idx]
         category=categories[idx]
-        geometry=category#TargetGeometries[category]
+        geometry=TargetGeometries[category]
         band=bands_batch[idx]
 
         """"
@@ -388,14 +413,14 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
         layers: conductor and conductor material / Substrate information
         """
         surfacetype=row["type"].values[0]
-        surfacetype=surfacetype#Surfacetypes[surfacetype]
+        surfacetype=Surfacetypes[surfacetype]
         
         layers=row["layers"].values[0]
         layers= layers.replace("'", '"')
         layer=json.loads(layers)
         
-        materialconductor=layer['conductor']['material']#Materials[layer['conductor']['material']]
-        materialsustrato=layer['substrate']['material']#Substrates[layer['substrate']['material']]
+        materialconductor=Materials[layer['conductor']['material']]
+        materialsustrato=Substrates[layer['substrate']['material']]
         
         
         if (target_val==2): #is cross. Because an added variable to the desing 
@@ -407,24 +432,28 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-1]
         
-        datos = ""
-        datos=", ".join([str(element) for element in  ["Geometry is:"+str(geometry),"Surface type is:"+str(surfacetype),"Material conductor is:"+str(materialconductor),"Substrate is:"+str(materialsustrato),"with a height of "+str(sustratoHeight),"the band:"+band,"the frequency:"+str(freq_val[idx])]])
-        datos = "[CLS] " + datos + " [SEP]"
-        values_array.append(["Geometry is:"+str(geometry),"Surface type is:"+str(surfacetype),"Material conductor is:"+str(materialconductor),"Substrate is:"+str(materialsustrato),"with a height of "+str(sustratoHeight),"the band:"+band,"the frequency:"+str(freq_val[idx])])
 
-        embedding=clipEmbedder(prompts=datos)   
+
+        datos = ""
+        datos=", ".join([str(element) for element in  ["Geometry is:"+str(geometry),"Surface type is:"+str(surfacetype),"Material conductor is:"+str(materialconductor),"Substrate is:"+str(materialsustrato),"with a height of "+str(sustratoHeight),"the band:"+str(band),"the frequency:"+str(freq_val[idx])]])
+        datos = "[CLS] " + datos + " [SEP]"
+        
+        intermediate_array.append(torch.Tensor([surfacetype,materialconductor,materialsustrato,sustratoHeight,band]))
+    
+    
+        embedding=Embedder(prompts=datos)   
 
         """clip"""
         #embedding=embedding[:,0:50:,:]
         """Bert"""
-        embedding=embedding[0][:,0:50:,:]
+        #embedding=embedding[0][:,0:50:,:]
 
-        arr.append( embedding)
+        #arr.append( embedding)
     
-    embedding = torch.cat(arr, dim=0)
+    #embedding = torch.cat(arr, dim=0)
+    values_array = torch.stack(intermediate_array)
 
     """ Values array solo pouede llenarse con n+umero y no con textos"""
-    # values_array = torch.Tensor(values_array)
     return values_array, embedding
 
 
@@ -451,7 +480,7 @@ def main():
     vision_transformer.to(device)
     print(vision_transformer)
 
-    date="MSE_1e-4_Bert_2out"
+    date="MSE_1e-4_NoCond_2out"
     PATH = 'VITtrainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(vision_transformer,device, PATH)
