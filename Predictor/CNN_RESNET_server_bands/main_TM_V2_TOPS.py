@@ -95,7 +95,7 @@ def arguments():
     parser.batch_size = 70
     parser.workers=1
     parser.gpu_number=1
-    parser.image_size = 128
+    parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
     parser.learning_rate =2e-5
@@ -135,7 +135,7 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
     #criterion = nn.CrossEntropyLoss()
     #criterion = nn.L1Loss()
     criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
 
     return model, opt, criterion , scheduler
 
@@ -630,7 +630,7 @@ def main():
     Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
 
 
-    date="_RESNET_Bands_5May_2e-5_50epc_h1000_f1000_128_MSE_MAXVAL_arrayCond_1TOP1Freq"
+    date="_RESNET152_Bands_6May_2e-5_50epc_h1000_f1000_64_MSE_arrayCond_1TOP1Freq"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,
