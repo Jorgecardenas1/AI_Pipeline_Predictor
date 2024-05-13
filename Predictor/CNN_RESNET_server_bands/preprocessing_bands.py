@@ -6,12 +6,16 @@ from pathlib import Path
 
 image_size=512
 
-imagesPath="../../../data/MetasufacesData/Images/processed128"
-imagesDestination="../../../data/MetasufacesData/Images-512-Suband"
+imagesPath="../../../data/MetasufacesData/Images/processed512"
+imagesDestination="../../../data/MetasufacesData/Images-512-Bands"
 
 folders=glob.glob(imagesPath+"/*.png", recursive = True)
 files=[]
 
+"""
+1. crear los folder en la subcarpeta previamente
+2. el folder circle, se nombre "circ" y luego se le cambia el nombre.
+"""
 
 
 index=0

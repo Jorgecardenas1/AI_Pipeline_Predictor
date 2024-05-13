@@ -243,8 +243,7 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
         batch=name.split('_')[4]
         iteration=series.split('-')[-1]
         row=df[(df['sim_id']==batch) & (df['iteration']==int(iteration))  ]
-        #print(batch)
-        #print(iteration)
+
 
         target_val=target[idx]
         category=categories[idx]
@@ -442,94 +441,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
     return i,epoch_loss,acc_train,score
 
-# def epoch_validate(epoch,model,vdataloader,device,opt,criterion,score_metric,clipEmbedder,df ):
-#     i_val=0 #running over validation set
-#     running_vloss = 0.0 #over validation set
-#     total_correct = 0
-#     acc_validation=0.0
-#     total_samples_val=0.0
-#     bands_batch=[]
 
-#     for vdata in tqdm(vdataloader):
-#         images, classes, names, classes_types  = vdata
-#         images = images.to(device)
-#         classes = classes.to(device)
-
-
-#         a = [] #array with truth values
-#         bands_batch =[]
-
-#         """lookup for data corresponding to every image in training batch"""
-#         for name in names:
-#             series=name.split('_')[-2]#
-#             band_name=name.split('_')[-1].split('.')[0]#
-
-#             batch=name.split('_')[4]
-
-#             for name in glob.glob(DataPath+batch+'/files/'+'/'+parser.metricType+'*'+series+'.csv'): 
-                
-#                 #loading the absorption data
-#                 train = pd.read_csv(name)
-                
-#                 # the band is divided in chunks 
-#                 if Bands[str(band_name)]==0:
-
-#                     train=train.loc[1:100]
-#                     train=train.max()
-
-#                 elif Bands[str(band_name)]==1:
-
-#                     train=train.loc[101:200]
-#                     train=train.max()
-#                 elif Bands[str(band_name)]==2:
-
-#                     train=train.loc[201:300]
-#                     train=train.max()
-#                 elif Bands[str(band_name)]==3:
-#                     train=train.loc[301:400]
-#                     train=train.max()
-#                 elif Bands[str(band_name)]==4:
-
-#                     train=train.loc[401:500]
-#                     train=train.max()
-#                 elif Bands[str(band_name)]==5:
-
-#                     train=train.loc[501:600]
-#                     train=train.max()
-                
-#                 values=np.array(train.values.T)
-#                 a.append(values[1])
-
-#                 bands_batch.append(band_name)
-
-                
-#         a=np.array(a) 
-
-#         """Creating a conditioning vector"""
-        
-#         _, embedded=set_conditioning(bands_batch,classes, names, classes_types,clipEmbedder,df,device)
-#         #conditioningTensor = torch.nn.functional.normalize(embedded, p=2.0, dim = 1)
-#         y_predicted=model(input_=images, conditioning=embedded.to(device) ,b_size=images.shape[0])
-#         #y_predicted=torch.nn.functional.normalize(y_predicted, p=2.0, dim = 1)
-#         #Scaling and normalizing
-#         y_predicted=y_predicted.to(device)
-#         y_truth = torch.tensor(a).to(device)
-#         y_truth = torch.unsqueeze(y_truth, 1)
-
-
-#         loss_per_val_batch,running_vloss, epoch_loss, acc_validation,score = metrics(criterion,
-#                                                             score_metric,
-#                                                             y_predicted,
-#                                                             y_truth, 
-#                                                             opt,
-#                                                             running_vloss,
-#                                                             _,
-#                                                             acc_validation,
-#                                                             train=False)
-
-#         i_val+=1
-
-#     return i_val,running_vloss,acc_validation,score
 
 
 def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train,train=True):
@@ -630,7 +542,7 @@ def main():
     Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
 
 
-    date="_RESNET152_Bands_6May_2e-5_50epc_h1000_f1000_64_MSE_arrayCond_1TOP1Freq"
+    date="_RESNET152_Bands_11May_2e-5_100epc_h1000_f1000_64_MSE_arrayCond_1TOP1Freq"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,

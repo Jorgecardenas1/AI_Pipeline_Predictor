@@ -1,6 +1,0 @@
-64
-5
-105
-100
-models/NETGModelTM_abs__GAN_Bands_4May_100epc_64_5conds_zcat.pth
-0

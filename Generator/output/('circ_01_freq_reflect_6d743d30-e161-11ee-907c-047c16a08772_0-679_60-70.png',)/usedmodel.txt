@@ -1,6 +1,0 @@
-image_size:64
-condition_len:5
-latent:105
-spectra_length:100
-gen_model:models/NETGModelTM_abs__GAN_Bands_4May_100epc_64_5conds_zcat.pth
-one_hot_encoding:0

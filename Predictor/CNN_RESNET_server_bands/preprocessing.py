@@ -9,16 +9,12 @@ imagesPath="../../../data/MetasufacesData/Images"
 folders=glob.glob(imagesPath+"/*/", recursive = True)
 files=[]
 
-processed="/processed128/"
-
-#bands = [
-#    [30,40],[40,50],[50,60],[60,70],[70,80],[80,90]
-#]
-
+processed="/processed512/"
 
 bands = [
-    [70,80]
+    [30,40],[40,50],[50,60],[60,70],[70,80],[80,90]
 ]
+
 
 
 print(folders)
