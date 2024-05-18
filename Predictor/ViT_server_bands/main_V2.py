@@ -98,15 +98,15 @@ def arguments():
     parser.add_argument("regression",type=int)
 
     parser.run_name = "Predictor Training"
-    parser.epochs = 10
+    parser.epochs = 50
     parser.batch_size = 50
     parser.workers=1
     parser.gpu_number=1
-    parser.image_size = 128
+    parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.learning_rate = 1e-4
-    parser.condition_len = 5
+    parser.learning_rate = 5e-5
+    parser.condition_len = 6
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.patch_size=16
     parser.regression=True
@@ -126,7 +126,7 @@ def arguments():
             "dropout": 0.2,
             "image_size":parser.image_size,
             "conditionalIn":True,
-            "conditionalLen":5,
+            "conditionalLen":6,
             "regression":parser.regression
 
         }
@@ -135,52 +135,7 @@ def arguments():
     return model_kwargs
 
 
-class BERTTextEmbedde(nn.Module):
-    def __init__(self, version: str = "'bert-base-uncased", device="cuda:0", max_length: int = 15):
-        """
-        :param version: is the model version
-        :param device: is the device
-        :param max_length: is the max length of the tokenized prompt
-        """
-        super().__init__()
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.model = BertForMaskedLM.from_pretrained('bert-base-uncased', output_hidden_states=True)
-        self.model.eval()
 
-        self.device = device
-        self.max_length = max_length
-
-    def forward(self, prompts: List[str]):
-        """
-        :param prompts: are the list of prompts to embed
-        """
-        tokens = self.tokenizer.tokenize(prompts)
-        indexed_tokens = self.tokenizer.convert_tokens_to_ids(tokens)
-        segments_ids = [1] * len(tokens)
-
-        tokens_tensor = torch.tensor([indexed_tokens])
-        segments_tensors = torch.tensor([segments_ids])
-
-        with torch.no_grad():
-
-            outputs = self.model(tokens_tensor, segments_tensors)
-
-        hidden_states = outputs[1]
-        
-        # print(hidden_states[0].size())
-        # print ("Number of layers:", len(hidden_states), "  (initial embeddings + 12 BERT layers)")
-        # layer_i = 0
-
-        # print ("Number of batches:", len(hidden_states[layer_i]))
-        # batch_i = 0
-
-        # print ("Number of tokens:", len(hidden_states[layer_i][batch_i]))
-        # token_i = 0
-
-        # print ("Number of hidden units:", len(hidden_states[layer_i][batch_i][token_i]))
-
-        return hidden_states
-    
 
 def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedder,df):
     i=0 #iteration
@@ -204,6 +159,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         opt.zero_grad()
         bands_batch=[]
         """lookup for data corresponding to every image in training batch"""
+
         for name in names:
 
             series=name.split('_')[-2]#
@@ -247,7 +203,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                 max_indx = np.argmax(values[1])
                 all_frequencies=values[0]
 
-                a.append([max_val,max_indx/100])
+                a.append([max_val,all_frequencies[max_indx]])
                 bands_batch.append(Bands[band_name])
 
                 #Creating the batch of maximum frequencies
@@ -299,6 +255,8 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
             print(f'accuracy: {acc_train/i :.3f} ')
             print(f'Score: {score :.3f} ')
             running_loss=0.0
+
+            
         #if i % 1000 ==  999:
                 
 
@@ -310,32 +268,26 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 def train(model,device, PATH):
     #### #File reading conf
 
-
     df = pd.read_csv("out.csv")
 
     """using weigth decay regularization"""
-    opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.9, 0.999),weight_decay=1e-2)
+    opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.9, 0.98),weight_decay=1e-4)
+    
     if parser.regression:
         criterion = nn.MSELoss()
     else:
         criterion = nn.CrossEntropyLoss()
         
-    Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
+    #Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
+    Bert=[] #just empty when not used
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.98)
 
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.95)
-
-    loss_per_batch=0
-    loss_per_val_batch=0
     loss_values, valid_loss_list = [], []
     acc=[]
     acc_val=[]
 
-    
-    if parser.device!='cpu':
-        model.to(device)
 
-    # prepare model fr training
-
+    # prepare model for training
     dataloader = utils.get_data_with_labels(parser.image_size, parser.image_size,1, boxImagesPath,parser.batch_size, drop_last=True,filter="30-40")
     #vdataloader = utils.get_data_with_labels(parser.image_size, parser.image_size,1, validationImages,parser.batch_size, drop_last=True)
 
@@ -433,15 +385,15 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,Embedder,df,dev
             sustratoHeight= sustratoHeight[-1]
         
 
-
+        """If using text embedding then .--"""
         datos = ""
         datos=", ".join([str(element) for element in  ["Geometry is:"+str(geometry),"Surface type is:"+str(surfacetype),"Material conductor is:"+str(materialconductor),"Substrate is:"+str(materialsustrato),"with a height of "+str(sustratoHeight),"the band:"+str(band),"the frequency:"+str(freq_val[idx])]])
         datos = "[CLS] " + datos + " [SEP]"
         
-        intermediate_array.append(torch.Tensor([surfacetype,materialconductor,materialsustrato,sustratoHeight,band]))
+        intermediate_array.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight,band]))
     
-    
-        embedding=Embedder(prompts=datos)   
+        embedding=0
+        #embedding=Embedder(prompts=datos)   
 
         """clip"""
         #embedding=embedding[:,0:50:,:]
@@ -469,7 +421,6 @@ def join_simulationData():
 def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
-
     print("Access main")
 
     model_kwargs=arguments()
@@ -478,9 +429,10 @@ def main():
 
     vision_transformer = Stack.VisionTransformer(**model_kwargs )
     vision_transformer.to(device)
+    vision_transformer.train()
     print(vision_transformer)
 
-    date="MSE_1e-4_NoCond_2out"
+    date="14May_tunedLRADAM_MSE_5e-5_6Cond_out1T1F"
     PATH = 'VITtrainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(vision_transformer,device, PATH)
