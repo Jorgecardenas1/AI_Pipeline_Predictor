@@ -168,6 +168,8 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
         surface type: reflective, transmissive
         layers: conductor and conductor material / Substrate information
         """
+       
+        
         surfacekey=row["type"].values[0]
         surfacetype=Surfacetypes[surfacekey]
         
@@ -238,7 +240,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         classes = classes.to(device) #categories
         
         #Loading data
-        a, bands_batch, max_freqs = []        
+        a, bands_batch, max_freqs = []    ,[],[]    
 
         opt.zero_grad()
 
@@ -402,7 +404,7 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 def train(opt,scheduler,criterion,model, clipEmbedder,device, PATH):
     #### #File reading conf
 
-    loss_values, valid_loss_list, acc,acc_val = [], []
+    loss_values, valid_loss_list, acc,acc_val = [],[],[],[]
 
     # Load simulated data
     df = pd.read_csv("out.csv")
