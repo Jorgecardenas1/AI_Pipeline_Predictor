@@ -100,7 +100,7 @@ def arguments():
     parser.learning_rate =2e-5
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
-    parser.condition_len=6 #this is to be modified when training for different metrics.
+    parser.condition_len=7 #this is to be modified when training for different metrics.
     parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
 
     categories=["box", "circle", "cross"]
@@ -182,14 +182,14 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
         
         
         if (target_val==2): #is cross. Because an added variable to the desing 
-            
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-2]
-            
+            substrateWidth = json.loads(row["paramValues"].values[0])[-1] # from the simulation crosses have this additional free param
         else:
         
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-1]
+            substrateWidth = 5 # 5 mm size
         
 
         """this to apply for one hot encoding"""
@@ -201,7 +201,7 @@ def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df
 
         #values_array = torch.cat((torch.Tensor(geometry),torch.Tensor(surfacetype),torch.Tensor(materialconductor),torch.Tensor(materialsustrato),torch.Tensor([sustratoHeight]),torch.Tensor(band)),0) #concat side
         
-        arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight,band]))
+        arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band]))
     
     #embedding = torch.stack(arr)
     values_array = torch.stack(arr)
