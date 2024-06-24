@@ -9,7 +9,15 @@ imagesPath="../../../data/MetasufacesData/Images"
 folders=glob.glob(imagesPath+"/*/", recursive = True)
 files=[]
 
-processed="/processed128/"
+processed="/processed512/"
+
+bands = [
+    [40,50],[50,60],[60,70],[70,80],[80,90]
+]
+#bands = [
+#    [80,90]
+#]
+
 
 print(folders)
 
@@ -20,12 +28,15 @@ for folder in folders:
 
 
 for file in files:
-    fileName_absolute = os.path.basename(file) 
-    path=os.path.dirname(file)
+    for band in bands:
 
-    #ROI is 
-    image_rgb=tools.cropImage( file,image_path=processed,
-                              image_name=fileName_absolute,
-                              output_path=imagesPath, 
-                             resize_dim=(image_size,image_size))
+        fileName_absolute = os.path.basename(file) 
+        newname=fileName_absolute.split(".")[0]+"_"+str(band[0])+"-"+str(band[1])+".png"
+        path=os.path.dirname(file)
+
+        #ROI is 
+        image_rgb=tools.cropImage( file,image_path=processed,
+                                image_name=newname,
+                                output_path=imagesPath, 
+                                resize_dim=(image_size,image_size))
         
