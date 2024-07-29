@@ -97,7 +97,7 @@ def arguments():
     parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
-    parser.learning_rate =1e-4
+    parser.learning_rate =5e-5
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
     parser.condition_len=7 #this is to be modified when training for different metrics.
@@ -127,7 +127,8 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
                                 Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
     
 
-    opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
+    #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
+    opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9)
     criterion=nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
 
@@ -335,11 +336,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         if array.shape[1]==parser.condition_len:
 
             #predicting
-            inv_normalize = torchvision.transforms.Normalize(
-            mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-            std=[1/0.229, 1/0.224, 1/0.225]
-            )     
-            inputs = inv_normalize(inputs)
+            array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
             y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
             y_predicted=y_predicted.to(device)
 
@@ -388,15 +385,18 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 
     if train:
         loss.backward()
-        loss_per_batch=loss.item()
+        loss_per_batch=loss.item()*1000
         opt.step()
     else:
         loss_per_batch=loss.item()
 
     # Metrics
     # compute the R2 score
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    sim = cos(y_predicted, y_truth).mean()
     score = r2_score(y_predicted, y_truth)
-    acc_train+= score.cpu().numpy() 
+
+    acc_train+= sim.cpu().detach().numpy() 
 
     #Loss
     running_loss +=loss_per_batch
