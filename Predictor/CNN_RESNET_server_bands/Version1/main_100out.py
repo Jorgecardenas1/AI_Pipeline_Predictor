@@ -1,6 +1,6 @@
 """Version 3
 Verison 4:  full spectra output
-"""
+Version 5: top values with FWHM and one hot encode"""
 
 from __future__ import print_function
 
@@ -12,7 +12,6 @@ from druida import Stack
 from druida import setup
 
 from druida.DataManager import datamanager
-#from druidaHFSS.modules import tools
 from druida.tools import utils
 
 import random
@@ -30,7 +29,6 @@ import torch.nn.functional as f
 from torchsummary import summary
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
-import torchvision
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from IPython.display import HTML
@@ -40,6 +38,7 @@ import argparse
 import json
 from PIL import Image
 
+from scipy.signal import find_peaks,peak_widths
 
 # Clip 
 
@@ -73,10 +72,15 @@ validationImages="../../../data/MetasufacesData/testImages/"
 Substrates={"Rogers RT/duroid 5880 (tm)":0}
 Materials={"copper":0,"pec":1}
 Surfacetypes={"Reflective":0,"Transmissive":1}
-TargetGeometries={"circ":0,"box":1, "cross":2}
+#TargetGeometries={"circ":0,"box":1, "cross":2}
 Bands={"30-40":0,"40-50":1, "50-60":2,"60-70":3,"70-80":4, "80-90":5}
+TargetGeometries={"circ":[1,0,0],"box":[0,1,0], "cross":[0,0,1]}
 
-
+#Bands={"30-40":[1,0,0,0,0,0],"40-50":[0,1,0,0,0,0], 
+#       "50-60":[0,0,1,0,0,0],"60-70":[0,0,0,1,0,0],"70-80":[0,0,0,0,1,0], 
+#       "80-90":[1,0,0,0,0,1]}
+#Height={"0.252":[1,0,0,0],"0.508":[0,1,0,0], 
+#       "0.787":[0,0,1,0],"1.575":[0,0,0,1]}
 
 def arguments():
 
@@ -95,22 +99,22 @@ def arguments():
     parser.add_argument("pred_size",type=int) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
-    parser.epochs = 50
-    parser.batch_size = 64
+    parser.epochs = 150
+    parser.batch_size = 32
     parser.workers=1
     parser.gpu_number=1
-    parser.image_size = 64
+    parser.image_size = 128
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
-    parser.learning_rate =2e-6
+    parser.learning_rate =5e-5
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
-    parser.condition_len=7 #this is to be modified when training for different metrics.
+    parser.condition_len=4 #this is to be modified when training for different metrics.
     parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
-    parser.pred_size=6 #this is to be modified when training for different metrics.
+    parser.pred_size=100#this is to be modified when training for different metrics.
 
-    if parser.pred_size==1:
-        parser.condition_len=parser.condition_len+1 #this is to be modified when training for different metrics.
+    #if parser.pred_size==1:
+    #    parser.condition_len=parser.condition_len+1 #this is to be modified when training for different metrics.
 
 
     categories=["box", "circle", "cross"]
@@ -138,7 +142,7 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
     
 
     opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
+    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
     criterion=nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
     model.train()
@@ -154,10 +158,10 @@ def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_si
                                Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
 
 
-    #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
+    opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
+    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
     criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
 
     return model, opt, criterion , scheduler
 
@@ -167,22 +171,18 @@ def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_si
 
 # Conditioning
 def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,df,device):
-    
-     #one hot encoders incase needed
-    substrate_encoder=encoders(Substrates)
-    materials_encoder=encoders(Materials)
-    surfaceType_encoder=encoders(Surfacetypes)
-    TargetGeometries_encoder=encoders(TargetGeometries)
-    bands_encoder=encoders(Bands)
+        
 
     arr=[] #intermediate array to build the batch of conditioning
     values_array=torch.tensor((), dtype=torch.float) # the conditioning tensor
 
     for idx,name in enumerate(path):
 
-        #print(name)
         series=name.split('_')[-2]
         batch=name.split('_')[4]
+        if batch=="v2":
+            batch=name.split('_')[5]      
+        
         iteration=series.split('-')[-1]
         row=df[(df['sim_id']==batch) & (df['iteration']==int(iteration))  ]
 
@@ -191,6 +191,7 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
         category=categories[idx]
         geometry=TargetGeometries[category]
         band=bands_batch[idx]
+        
 
         """"
         surface type: reflective, transmissive
@@ -212,11 +213,14 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
         if (target_val==2): #is cross. Because an added variable to the desing 
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-2]
+            #sustratoHeight = Height[str(sustratoHeight)]
+
             substrateWidth = json.loads(row["paramValues"].values[0])[-1] # from the simulation crosses have this additional free param
         else:
         
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-1]
+            #sustratoHeight = Height[str(sustratoHeight)]
             substrateWidth = 5 # 5 mm size
         
 
@@ -228,10 +232,14 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
   
 
         #values_array = torch.cat((torch.Tensor(geometry),torch.Tensor(surfacetype),torch.Tensor(materialconductor),torch.Tensor(materialsustrato),torch.Tensor([sustratoHeight]),torch.Tensor(band)),0) #concat side
-        if parser.pred_size==1:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band,freqx_val]))
-        else:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band]))
+        #if parser.pred_size==1:
+        #    arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band,freqx_val]))
+       
+        #else:
+        val_arr=torch.Tensor(geometry)
+        val_arr=torch.cat((val_arr,torch.Tensor([band])),0)
+        #val_arr = torch.Tensor([band,freqx_val])
+        arr.append(val_arr)
 
     #embedding = torch.stack(arr)
     values_array = torch.stack(arr)
@@ -278,15 +286,20 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
             series=name.split('_')[-2]# getting series and batches names 
             band_name=name.split('_')[-1].split('.')[0]# Getting the band for the corresponding image
             batch=name.split('_')[4]
+            version_batch=1
+            if batch=="v2":
+                version_batch=2
+                batch=name.split('_')[5]
 
             for name in glob.glob(DataPath+batch+'/files/'+'/'+parser.metricType+'*'+series+'.csv'): 
                 
                 #loading the absorption data
                 train = pd.read_csv(name)
 
+
                 # # the band is divided in chunks 
                 if Bands[str(band_name)]==0:
-                    
+                
                     train=train.loc[1:100]
 
                 elif Bands[str(band_name)]==1:
@@ -294,167 +307,125 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                     train=train.loc[101:200]
 
                 elif Bands[str(band_name)]==2:
-                    
-                    train=train.loc[201:300]
-
+                    if version_batch==1:
+                        train=train.loc[201:300]
+                    else:
+                        train=train.loc[1:100]
                 elif Bands[str(band_name)]==3:
-                    
-                    train=train.loc[301:400]
+                    if version_batch==1:
+                        train=train.loc[301:400]
+                    else:
+                        train=train.loc[101:200]
 
                 elif Bands[str(band_name)]==4:
-                    
-                    train=train.loc[401:500]
+                    if version_batch==1: 
+                        train=train.loc[401:500]
+                    else:
+                        train=train.loc[201:300]
 
                 elif Bands[str(band_name)]==5:
 
                     train=train.loc[501:600]
                 
+                
 
                 #preparing data from spectra for each image
-                values=np.array(train.values.T)
-                #values=np.around(values, decimals=2, out=None)
+                data=np.array(train.values.T)
+                values=data[1]
+                all_frequencies=data[0]
+                all_frequencies = np.array([(float(i)-min(all_frequencies))/(max(all_frequencies)-min(all_frequencies)) for i in all_frequencies])
 
-                #get top frequencies for top values 
-                tops, indx = torch.topk(torch.from_numpy(values[1]), 3, largest=True)      
-                max_indx = indx
-
-                #Getting the array of frequencies
-                all_frequencies=torch.from_numpy(values[0])
-
+                values[values<0.05]=0
+                #get top freqencies for top values 
+                data, fre_peaks,results_half, peaks = find_peaks_values(values,all_frequencies)
                 #creating the labels tensor with top values and its frequencies
-                #labels_tensor=torch.cat((tops,all_frequencies[max_indx]),0)
 
+                labels_tensor=torch.cat((torch.from_numpy(data),torch.from_numpy(fre_peaks)),0)
+                #labels_tensor=torch.from_numpy(values)
+                
                 #batching
-                #a.append(labels_tensor)
-                a.append(torch.from_numpy(values[1]))
+                a.append(torch.from_numpy(values))
 
                 #saving bands and frequencies 
                 bands_batch.append(Bands[band_name])
-                max_freqs.append(all_frequencies[max_indx])
+                max_freqs.append(all_frequencies[peaks])
                 
 
 
         """Creating a conditioning vector"""
-        if parser.pred_size==1:
-            
-            
-            for idx,freq in enumerate(all_frequencies):
-                
-                opt.zero_grad()
+        #for item in all_frequencies:
 
+            #freq_indx = list(all_frequencies).index(item)
+        opt.zero_grad()
 
-                array=set_conditioning(bands_batch,
-                                                freq,
-                                                classes, 
-                                                names, 
-                                                classes_types,
-                                                clipEmbedder,
-                                                df,
-                                                device)
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
+        array=set_conditioning(bands_batch,
+                                        None,
+                                        classes, 
+                                        names, 
+                                        classes_types,
+                                        clipEmbedder,
+                                        df,
+                                        device)
+        # the prediction 
+        array = torch.nn.functional.normalize(array, p=2.0, dim=1, eps=1e-5, out=None)
+        y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
+        y_predicted=y_predicted.to(device)
+        y_truth = torch.stack(a).to(device)
+        #y_truth =  torch.unsqueeze(y_truth, 1)
 
-                #embedded=embedded.view(parser .batch_size,parser.condition_len)
-                #embedded = embedded.mean(1)
-                """showing embedding image"""
+        
+        loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
+                                                                    y_predicted,
+                                                                    y_truth, opt,
+                                                                    running_loss,
+                                                                    epoch_loss,
+                                                                    acc_train,
+                                                                    train=True)
+        
+        i += 1
 
-                # plot =  array.clone().detach().cpu()
+        if i % 100 ==  99:    # print every X mini-batches
 
-                # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*parser.cond_channel, bias=True)           
-                # x2 = l1(plot) #Size must be taken care = 800 in this case
-                # m = nn.Tanh()
-                # x2 = m(x2)
-                # x2 = x2.reshape(int(parser.batch_size),parser.cond_channel,parser.image_size,parser.image_size)
-                # save_image(x2[0], str(i)+'onehot_array.png')
-                # save_image(inputs[0], str(i)+'_image.png')
-
-
-                # the prediction 
-                if array.shape[1]==parser.condition_len:
-
-                    #predicting
-                    
-                    y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                    y_predicted=y_predicted.to(device)
-                    m = nn.Sigmoid()
-                    y_predicted = m(y_predicted)
-
-                    #y_predicted= torch.squeeze(y_predicted, dim=1)
-                    y_truth = torch.stack(a)[:,idx].to(device)
-                    y_truth = y_truth.unsqueeze(1)
-                    """this just in case required depending on changes applied to output vector"""
-                    #y_truth =  torch.unsqueeze(y_truth, 1)
-                    #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                    loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                                y_predicted,
-                                                                                y_truth, opt,
-                                                                                running_loss,
-                                                                                epoch_loss,
-                                                                                acc_train,
-                                                                                train=True)
-                    
-                    i += 1
-
-                    if i % 100 ==  99:    # print every X mini-batches
-                    
-                        print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                        print(f'accuracy: {acc_train/i :.3f} ')
-                        print(f'Score: {score :.3f} ')
-                        running_loss=0.0
-        else:
-            
-            opt.zero_grad()
-
-            array=set_conditioning(bands_batch,
-                                            max_freqs,
-                                            classes, 
-                                            names, 
-                                            classes_types,
-                                            clipEmbedder,
-                                            df,
-                                            device)
-            
-
-
-            # the prediction 
-            if array.shape[1]==parser.condition_len:
-
-                #predicting
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
-
-                y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                y_predicted=y_predicted.to(device)
-                #m = nn.Sigmoid()
-                #y_predicted = m(y_predicted)
-                
-                y_truth = torch.stack(a).to(device)
-                
-                """this just in case required depending on changes applied to output vector"""
-                #y_truth =  torch.unsqueeze(y_truth, 1)
-                #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                            y_predicted,
-                                                                            y_truth, opt,
-                                                                            running_loss,
-                                                                            epoch_loss,
-                                                                            acc_train,
-                                                                            train=True)
-                
-                i += 1
-
-                if i % 100 ==  99:    # print every X mini-batches
-                
-                    print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                    print(f'accuracy: {acc_train/i :.3f} ')
-                    print(f'Score: {score :.3f} ')
-                    running_loss=0.0           
+            print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {epoch_loss/i:.3f}')
+            print(f' score: {score :.3f} ')
+            running_loss=0.0           
 
     #update the learning rate
     scheduler.step()
-    print("learning_rate: ",scheduler.get_last_lr())
 
     return i,epoch_loss,acc_train,score
+
+def find_peaks_values(values, all_frequencies):
+        peaks = find_peaks(values, threshold=0.00001)[0] #indexes of peaks
+        results_half = peak_widths(values, peaks, rel_height=0.5) #4 arrays: widths, y position, initial and final x
+        results_half = results_half[0]
+        data = values[peaks]
+        fre_peaks =all_frequencies[peaks]
+        length_output=3
+
+        if len(peaks)>length_output:
+            data = data[0:length_output]
+            fre_peaks = fre_peaks[0:length_output]
+            results_half = results_half[0:length_output]
+
+        elif len(peaks)==0:
+
+            data = np.zeros(length_output)
+            fre_peaks = all_frequencies[0:length_output]
+            results_half = np.zeros(length_output)
+
+        else:
+
+            difference = length_output-len(peaks)
+
+            for idnx in range(difference):
+                data = np.append(data, 0)
+                fequencies = np.where(values<0.1)
+                fequencies = np.squeeze(fequencies)
+                fre_peaks = np.append(fre_peaks,all_frequencies[fequencies[idnx]])
+                results_half = np.append(results_half,0)
+
+        return data, fre_peaks,results_half, peaks
 
 def mape_loss_fn(output, target):
     # MAPE loss
@@ -462,15 +433,11 @@ def mape_loss_fn(output, target):
 
 #here we calculate loss for the training process
 def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train,train=True):
-
     
     loss_per_batch=0
 
     #apply criterion
-    loss = criterion(y_predicted.float(), y_truth.float())  
-    loss = loss
-
-
+    loss = criterion(y_predicted.float(), y_truth.float())
     if train:
         loss.backward()
         loss_per_batch=loss.item()
@@ -482,11 +449,11 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
     # compute the R2 score
     #cos = nn.CosineSimilarity(dim=0, eps=1e-6)
     #sim = cos(y_predicted, y_truth).mean()
-    mape = mape_loss_fn(y_predicted, y_truth)
+    #mape = mape_loss_fn(y_predicted, y_truth)
     #print(mape)
     score = r2_score(y_predicted, y_truth)
 
-    acc_train+= mape.cpu().detach().numpy() 
+    acc_train+= 0
 
     #Loss
     running_loss +=loss_per_batch
@@ -505,28 +472,25 @@ def train(opt,scheduler,criterion,model, clipEmbedder,device, PATH):
     # Load simulated data
     df = pd.read_csv("out.csv")
 
-
-    #load images data
-    dataloader = utils.get_data_with_labels(parser.image_size,parser.image_size,1, 
-                                            boxImagesPath,parser.batch_size,
-                                            drop_last=True,
-                                            filter="30-40")#filter disabled
-    
     #vdataloader = utils.get_data_with_labels(parser.image_size, parser.image_size,1,
     #                                        validationImages,parser.batch_size, 
     #                                        drop_last=True,
     #                                        filter="30-40")
-
+    
+    dataloader = utils.get_data_with_labels(parser.image_size,parser.image_size,1, 
+                                                boxImagesPath,parser.batch_size,
+                                                drop_last=True,
+                                                filter="30-40")#filter disabled
     for epoch in range(parser.epochs):
-
+        #load images data
+       
         model.train() #in case required for validation
 
         total,epoch_loss,acc_train,score_train=epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedder,df)
 
         print("learning_rate: ",scheduler.get_last_lr())
+        print("epoch_loss: ",epoch_loss/total)
         loss_values.append(epoch_loss/total )
-
-        print("mean Acc per epoch",acc_train/total)
         acc.append(acc_train/total)
 
         torch.save(model.state_dict(), PATH)
@@ -545,7 +509,7 @@ def main():
     arguments()
     join_simulationData()  
 
-    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.3,features=1000, Y_prediction_size=parser.pred_size)
+    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
     #fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
 
     fwd_test = fwd_test.to(device)
@@ -555,7 +519,7 @@ def main():
     """option of word embedding"""
     Bert=None
 
-    date="_CNN_Bands_1Ago_2e-5_100epc_h1000_f1000_64_MSE_100out"
+    date="_RESNET152_7sep_5e-5_20epc_ADAM_100out"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,

@@ -1,7 +1,3 @@
-"""Version 3
-Verison 4:  full spectra output
-"""
-
 from __future__ import print_function
 
 import os
@@ -65,11 +61,12 @@ parser = argparse.ArgumentParser()
 
 boxImagesPath="../../../data/MetasufacesData/Images-512-Bands/"
 #boxImagesPath="../../../data/MetasufacesData/Images-512-Suband/"
+
 DataPath="../../../data/MetasufacesData/Exports/output/"
 simulationData="../../../data/MetasufacesData/DBfiles/"
 validationImages="../../../data/MetasufacesData/testImages/"
 
-#Design parameters
+
 Substrates={"Rogers RT/duroid 5880 (tm)":0}
 Materials={"copper":0,"pec":1}
 Surfacetypes={"Reflective":0,"Transmissive":1}
@@ -92,26 +89,20 @@ def arguments():
     parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
     parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
     parser.add_argument("resnet_arch",type=str) #This defines the length of our conditioning vector
-    parser.add_argument("pred_size",type=int) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
-    parser.epochs = 50
-    parser.batch_size = 64
+    parser.epochs = 100
+    parser.batch_size = 70
     parser.workers=1
     parser.gpu_number=1
     parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
-    parser.learning_rate =2e-6
+    parser.learning_rate =2e-5
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
-    parser.condition_len=7 #this is to be modified when training for different metrics.
+    parser.condition_len=6 #this is to be modified when training for different metrics.
     parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
-    parser.pred_size=6 #this is to be modified when training for different metrics.
-
-    if parser.pred_size==1:
-        parser.condition_len=parser.condition_len+1 #this is to be modified when training for different metrics.
-
 
     categories=["box", "circle", "cross"]
 
@@ -127,6 +118,7 @@ def join_simulationData():
     
 
 # Load Model
+
 def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_size=601):
     model = Stack.Predictor_RESNET(parser.resnet_arch,conditional=True, cond_input_size=parser.condition_len, 
                                    cond_channels=parser.cond_channel, 
@@ -136,57 +128,123 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
                                 dropout=dropout, 
                                 Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
     
+    #torch.nn.init.xavier_uniform_(model.fc.weight) #Fill the input Tensor with values using a Xavier uniform distribution.
+
 
     opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
+    #criterion = nn.CrossEntropyLoss()
+    #criterion = nn.L1Loss()
     criterion=nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
-    model.train()
-    return model, opt, criterion , scheduler
-
-def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_size=601):
-   
-    model =  Stack.Predictor_CNN(cond_input_size=parser.condition_len, 
-                               ngpu=1, image_size=parser.image_size ,
-                               output_size=8, channels=3,
-                               features_num=features,hiden_num=hiden_num, #Its working with hiden nums. Features in case and extra linear layer
-                               dropout=dropout, 
-                               Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
-
-
-    #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
-    criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.9)
 
     return model, opt, criterion , scheduler
 
+
+class CLIPTextEmbedder(nn.Module):
+    """
+    ## CLIP Text Embedder
+    """
+
+    def __init__(self, version: str = "openai/clip-vit-large-patch14", device="cuda:0", max_length: int = 50):
+        """
+        :param version: is the model version
+        :param device: is the device
+        :param max_length: is the max length of the tokenized prompt
+        """
+        super().__init__()
+        # Load the tokenizer
+        self.tokenizer = CLIPTokenizer.from_pretrained(version,device_map = device)
+        # Load the CLIP transformer
+        self.transformer = CLIPTextModel.from_pretrained(version,device_map = device).eval()
+        
+        self.transformer.eval()
+
+        self.device = device
+        self.max_length = max_length
+
+    def forward(self, prompts: List[str]):
+        """
+        :param prompts: are the list of prompts to embed
+        """
+        # Tokenize the prompts
+        batch_encoding = self.tokenizer(prompts, truncation=False, max_length=self.max_length, return_length=True,
+                                        return_overflowing_tokens=False, padding="max_length", return_tensors="pt").to(self.device)
+        # Get token ids
+        tokens = batch_encoding["input_ids"]
+        # Get CLIP embeddings
+        return self.transformer(input_ids=tokens).last_hidden_state
+    
+
+class BERTTextEmbedde(nn.Module):
+    def __init__(self, version: str = "'bert-base-uncased", device="cuda:0", max_length: int = 50):
+        """
+        :param version: is the model version
+        :param device: is the device
+        :param max_length: is the max length of the tokenized prompt
+        """
+        super().__init__()
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.model = BertForMaskedLM.from_pretrained('bert-base-uncased', output_hidden_states=True)
+        self.model.eval()
+
+        self.device = device
+        self.max_length = max_length
+
+    def forward(self, prompts: List[str]):
+        """
+        :param prompts: are the list of prompts to embed
+        """
+        tokens = self.tokenizer.tokenize(prompts)
+        indexed_tokens = self.tokenizer.convert_tokens_to_ids(tokens)
+        segments_ids = [1] * len(tokens)
+
+        tokens_tensor = torch.tensor([indexed_tokens])
+        segments_tensors = torch.tensor([segments_ids])
+
+        with torch.no_grad():
+
+            outputs = self.model(tokens_tensor, segments_tensors)
+
+        hidden_states = outputs[1]
+        
+        # print(hidden_states[0].size())
+        # print ("Number of layers:", len(hidden_states), "  (initial embeddings + 12 BERT layers)")
+        # layer_i = 0
+
+        # print ("Number of batches:", len(hidden_states[layer_i]))
+        # batch_i = 0
+
+        # print ("Number of tokens:", len(hidden_states[layer_i][batch_i]))
+        # token_i = 0
+
+        # print ("Number of hidden units:", len(hidden_states[layer_i][batch_i][token_i]))
+
+        return hidden_states
+
+        
 
 
 
 
 # Conditioning
-def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,df,device):
-    
-     #one hot encoders incase needed
+def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df,device):
+     #one hot encoders
     substrate_encoder=encoders(Substrates)
     materials_encoder=encoders(Materials)
     surfaceType_encoder=encoders(Surfacetypes)
     TargetGeometries_encoder=encoders(TargetGeometries)
     bands_encoder=encoders(Bands)
 
-    arr=[] #intermediate array to build the batch of conditioning
-    values_array=torch.tensor((), dtype=torch.float) # the conditioning tensor
+    arr=[]
+    values_array=torch.tensor((), dtype=torch.float)
 
     for idx,name in enumerate(path):
-
-        #print(name)
         series=name.split('_')[-2]
         batch=name.split('_')[4]
         iteration=series.split('-')[-1]
         row=df[(df['sim_id']==batch) & (df['iteration']==int(iteration))  ]
 
-        #getting values from design parameters
+
         target_val=target[idx]
         category=categories[idx]
         geometry=TargetGeometries[category]
@@ -196,8 +254,6 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
         surface type: reflective, transmissive
         layers: conductor and conductor material / Substrate information
         """
-       
-        
         surfacekey=row["type"].values[0]
         surfacetype=Surfacetypes[surfacekey]
         
@@ -210,14 +266,14 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
         
         
         if (target_val==2): #is cross. Because an added variable to the desing 
+            
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-2]
-            substrateWidth = json.loads(row["paramValues"].values[0])[-1] # from the simulation crosses have this additional free param
+            
         else:
         
             sustratoHeight= json.loads(row["paramValues"].values[0])
             sustratoHeight= sustratoHeight[-1]
-            substrateWidth = 5 # 5 mm size
         
 
         """this to apply for one hot encoding"""
@@ -228,18 +284,14 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
   
 
         #values_array = torch.cat((torch.Tensor(geometry),torch.Tensor(surfacetype),torch.Tensor(materialconductor),torch.Tensor(materialsustrato),torch.Tensor([sustratoHeight]),torch.Tensor(band)),0) #concat side
-        if parser.pred_size==1:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band,freqx_val]))
-        else:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band]))
-
+        
+        arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight,band]))
+    
     #embedding = torch.stack(arr)
     values_array = torch.stack(arr)
     """ Values array solo pouede llenarse con n+umero y no con textos"""
     # values_array = torch.Tensor(values_array)
-
     return values_array
-
 
 def encoders(dictionary):
     index = []
@@ -260,27 +312,28 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
     print('Epoch {}/{}'.format(epoch, parser.epochs - 1))
     print('-' * 10)
+    break_=False
     
     for data in tqdm(dataloader):
         
         inputs, classes, names, classes_types = data
-        
         #sending to CUDA
-        inputs = inputs.to(device) #images
-        classes = classes.to(device) #categories
+        inputs = inputs.to(device)
+        classes = classes.to(device)
+        
         #Loading data
-        a, bands_batch, max_freqs = []    ,[],[]    
-
-
+        a = []        
+        opt.zero_grad()
+        bands_batch=[]
+        max_freqs = []
         """lookup for data corresponding to every image in training batch"""
         for name in names:
 
-            series=name.split('_')[-2]# getting series and batches names 
-            band_name=name.split('_')[-1].split('.')[0]# Getting the band for the corresponding image
+            series=name.split('_')[-2]#
+            band_name=name.split('_')[-1].split('.')[0]#
             batch=name.split('_')[4]
 
             for name in glob.glob(DataPath+batch+'/files/'+'/'+parser.metricType+'*'+series+'.csv'): 
-                
                 #loading the absorption data
                 train = pd.read_csv(name)
 
@@ -309,188 +362,111 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
                     train=train.loc[501:600]
                 
+                #train=train.loc[401:500]
 
-                #preparing data from spectra for each image
                 values=np.array(train.values.T)
-                #values=np.around(values, decimals=2, out=None)
+                values=np.around(values, decimals=2, out=None)
 
-                #get top frequencies for top values 
-                tops, indx = torch.topk(torch.from_numpy(values[1]), 3, largest=True)      
+
+                tops, indx = torch.topk(torch.from_numpy(values[1]), 1, largest=True)
+                           
+                max_val = tops
                 max_indx = indx
-
-                #Getting the array of frequencies
                 all_frequencies=torch.from_numpy(values[0])
 
-                #creating the labels tensor with top values and its frequencies
-                #labels_tensor=torch.cat((tops,all_frequencies[max_indx]),0)
+                #a.append([max_val,all_frequencies[max_indx]])
+                labels_tensor=torch.cat((tops,all_frequencies[max_indx]),0)
+                a.append(labels_tensor)
 
-                #batching
-                #a.append(labels_tensor)
-                a.append(torch.from_numpy(values[1]))
-
-                #saving bands and frequencies 
                 bands_batch.append(Bands[band_name])
                 max_freqs.append(all_frequencies[max_indx])
                 
 
+                #Creating the batch of maximum frequencies
 
         """Creating a conditioning vector"""
-        if parser.pred_size==1:
+
+        array=set_conditioning(bands_batch,
+                                         max_freqs,
+                                         classes, 
+                                         names, 
+                                         classes_types,
+                                         clipEmbedder,
+                                         df,
+                                         device)
+        #embedded=embedded.view(parser.batch_size,parser.condition_len)
+        #embedded = embedded.mean(1)
+        """showing embedding image"""
+
+        # plot =  array.clone().detach().cpu()
+
+        # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*parser.cond_channel, bias=True)           
+        # x2 = l1(plot) #Size must be taken care = 800 in this case
+        # m = nn.Tanh()
+        # x2 = m(x2)
+        # x2 = x2.reshape(int(parser.batch_size),parser.cond_channel,parser.image_size,parser.image_size)
+        # save_image(x2[0], str(i)+'onehot_array.png')
+        # save_image(inputs[0], str(i)+'_image.png')
+
+        if array.shape[1]==parser.condition_len:
+
+            y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
+
+            y_predicted=y_predicted.to(device)
+            y_truth = torch.stack(a).to(device)
+            #y_truth =  torch.unsqueeze(y_truth, 1)
+            #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
+
+            loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
+                                                                        y_predicted,
+                                                                        y_truth, opt,
+                                                                        running_loss,
+                                                                        epoch_loss,
+                                                                        acc_train,
+                                                                        train=True)
+            i += 1
+
+            if i % 100 ==  99:    # print every 2000 mini-batches
             
-            
-            for idx,freq in enumerate(all_frequencies):
+                #print(y_predicted,y_truth)
+
+                print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
+                print(f'accuracy: {acc_train/i :.3f} ')
+                print(f'Score: {score :.3f} ')
+                running_loss=0.0
+            #if i % 1000 ==  999:
                 
-                opt.zero_grad()
 
-
-                array=set_conditioning(bands_batch,
-                                                freq,
-                                                classes, 
-                                                names, 
-                                                classes_types,
-                                                clipEmbedder,
-                                                df,
-                                                device)
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
-
-                #embedded=embedded.view(parser .batch_size,parser.condition_len)
-                #embedded = embedded.mean(1)
-                """showing embedding image"""
-
-                # plot =  array.clone().detach().cpu()
-
-                # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*parser.cond_channel, bias=True)           
-                # x2 = l1(plot) #Size must be taken care = 800 in this case
-                # m = nn.Tanh()
-                # x2 = m(x2)
-                # x2 = x2.reshape(int(parser.batch_size),parser.cond_channel,parser.image_size,parser.image_size)
-                # save_image(x2[0], str(i)+'onehot_array.png')
-                # save_image(inputs[0], str(i)+'_image.png')
-
-
-                # the prediction 
-                if array.shape[1]==parser.condition_len:
-
-                    #predicting
-                    
-                    y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                    y_predicted=y_predicted.to(device)
-                    m = nn.Sigmoid()
-                    y_predicted = m(y_predicted)
-
-                    #y_predicted= torch.squeeze(y_predicted, dim=1)
-                    y_truth = torch.stack(a)[:,idx].to(device)
-                    y_truth = y_truth.unsqueeze(1)
-                    """this just in case required depending on changes applied to output vector"""
-                    #y_truth =  torch.unsqueeze(y_truth, 1)
-                    #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                    loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                                y_predicted,
-                                                                                y_truth, opt,
-                                                                                running_loss,
-                                                                                epoch_loss,
-                                                                                acc_train,
-                                                                                train=True)
-                    
-                    i += 1
-
-                    if i % 100 ==  99:    # print every X mini-batches
-                    
-                        print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                        print(f'accuracy: {acc_train/i :.3f} ')
-                        print(f'Score: {score :.3f} ')
-                        running_loss=0.0
-        else:
-            
-            opt.zero_grad()
-
-            array=set_conditioning(bands_batch,
-                                            max_freqs,
-                                            classes, 
-                                            names, 
-                                            classes_types,
-                                            clipEmbedder,
-                                            df,
-                                            device)
-            
-
-
-            # the prediction 
-            if array.shape[1]==parser.condition_len:
-
-                #predicting
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
-
-                y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                y_predicted=y_predicted.to(device)
-                #m = nn.Sigmoid()
-                #y_predicted = m(y_predicted)
-                
-                y_truth = torch.stack(a).to(device)
-                
-                """this just in case required depending on changes applied to output vector"""
-                #y_truth =  torch.unsqueeze(y_truth, 1)
-                #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                            y_predicted,
-                                                                            y_truth, opt,
-                                                                            running_loss,
-                                                                            epoch_loss,
-                                                                            acc_train,
-                                                                            train=True)
-                
-                i += 1
-
-                if i % 100 ==  99:    # print every X mini-batches
-                
-                    print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                    print(f'accuracy: {acc_train/i :.3f} ')
-                    print(f'Score: {score :.3f} ')
-                    running_loss=0.0           
-
-    #update the learning rate
     scheduler.step()
     print("learning_rate: ",scheduler.get_last_lr())
 
     return i,epoch_loss,acc_train,score
 
-def mape_loss_fn(output, target):
-    # MAPE loss
-    return torch.mean(torch.abs((target - output) / target))
 
-#here we calculate loss for the training process
+
+
 def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train,train=True):
 
-    
     loss_per_batch=0
 
-    #apply criterion
-    loss = criterion(y_predicted.float(), y_truth.float())  
-    loss = loss
-
+    errD_real = criterion(y_predicted.float(), y_truth.float())  
 
     if train:
-        loss.backward()
-        loss_per_batch=loss.item()
+        errD_real.backward()
+        loss_per_batch=errD_real.item()
         opt.step()
     else:
-        loss_per_batch=loss.item()
+        loss_per_batch=errD_real.item()
 
     # Metrics
     # compute the R2 score
-    #cos = nn.CosineSimilarity(dim=0, eps=1e-6)
-    #sim = cos(y_predicted, y_truth).mean()
-    mape = mape_loss_fn(y_predicted, y_truth)
-    #print(mape)
-    score = r2_score(y_predicted, y_truth)
 
-    acc_train+= mape.cpu().detach().numpy() 
+    score = r2_score(y_predicted, y_truth)
+    acc_train+= score.cpu().numpy() 
 
     #Loss
     running_loss +=loss_per_batch
-    #print(running_loss)
+
     if train:
         epoch_loss+=loss_per_batch
 
@@ -500,35 +476,39 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 def train(opt,scheduler,criterion,model, clipEmbedder,device, PATH):
     #### #File reading conf
 
-    loss_values, valid_loss_list, acc,acc_val = [],[],[],[]
+    loss_values, valid_loss_list = [], []
+    acc=[]
+    acc_val=[]
 
-    # Load simulated data
     df = pd.read_csv("out.csv")
+    
 
 
-    #load images data
     dataloader = utils.get_data_with_labels(parser.image_size,parser.image_size,1, 
                                             boxImagesPath,parser.batch_size,
                                             drop_last=True,
                                             filter="30-40")#filter disabled
     
-    #vdataloader = utils.get_data_with_labels(parser.image_size, parser.image_size,1,
-    #                                        validationImages,parser.batch_size, 
-    #                                        drop_last=True,
-    #                                        filter="30-40")
+    vdataloader = utils.get_data_with_labels(parser.image_size, parser.image_size,1,
+                                            validationImages,parser.batch_size, 
+                                            drop_last=True,
+                                            filter="30-40")
 
     for epoch in range(parser.epochs):
 
-        model.train() #in case required for validation
-
+        model.train()
         total,epoch_loss,acc_train,score_train=epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedder,df)
 
         print("learning_rate: ",scheduler.get_last_lr())
         loss_values.append(epoch_loss/total )
-
         print("mean Acc per epoch",acc_train/total)
         acc.append(acc_train/total)
+        #print("train acc",acc)
+            
+        """validation"""
 
+        # Set the model to evaluation mode, disabling dropout and using population
+        # statistics for batch normalization.
         torch.save(model.state_dict(), PATH)
 
     
@@ -545,17 +525,17 @@ def main():
     arguments()
     join_simulationData()  
 
-    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.3,features=1000, Y_prediction_size=parser.pred_size)
-    #fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
-
+    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.1,features=1000, Y_prediction_size=2)
     fwd_test = fwd_test.to(device)
 
     print(fwd_test)
 
-    """option of word embedding"""
-    Bert=None
+    """option of embedding"""
+    ClipEmbedder=CLIPTextEmbedder(version= "openai/clip-vit-large-patch14",device=device, max_length = parser.batch_size)
+    Bert=BERTTextEmbedde(device=device, max_length = parser.batch_size)
 
-    date="_CNN_Bands_1Ago_2e-5_100epc_h1000_f1000_64_MSE_100out"
+
+    date="_RESNET152_Bands_11May_2e-5_100epc_h1000_f1000_64_MSE_arrayCond_1TOP1Freq"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,

@@ -1,7 +1,3 @@
-"""Version 3
-Verison 4:  full spectra output
-"""
-
 from __future__ import print_function
 
 import os
@@ -92,7 +88,6 @@ def arguments():
     parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
     parser.add_argument("cond_channel",type=int) #This defines the length of our conditioning vector
     parser.add_argument("resnet_arch",type=str) #This defines the length of our conditioning vector
-    parser.add_argument("pred_size",type=int) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
     parser.epochs = 50
@@ -102,16 +97,11 @@ def arguments():
     parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
-    parser.learning_rate =2e-6
+    parser.learning_rate =1e-4
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
     parser.condition_len=7 #this is to be modified when training for different metrics.
     parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
-    parser.pred_size=6 #this is to be modified when training for different metrics.
-
-    if parser.pred_size==1:
-        parser.condition_len=parser.condition_len+1 #this is to be modified when training for different metrics.
-
 
     categories=["box", "circle", "cross"]
 
@@ -138,35 +128,18 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
     
 
     opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
     criterion=nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
-    model.train()
-    return model, opt, criterion , scheduler
-
-def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_size=601):
-   
-    model =  Stack.Predictor_CNN(cond_input_size=parser.condition_len, 
-                               ngpu=1, image_size=parser.image_size ,
-                               output_size=8, channels=3,
-                               features_num=features,hiden_num=hiden_num, #Its working with hiden nums. Features in case and extra linear layer
-                               dropout=dropout, 
-                               Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
-
-
-    #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=0.5)
-    criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.9)
 
     return model, opt, criterion , scheduler
+
 
 
 
 
 
 # Conditioning
-def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,df,device):
+def set_conditioning(bands_batch,freq_val,target,path,categories,clipEmbedder,df,device):
     
      #one hot encoders incase needed
     substrate_encoder=encoders(Substrates)
@@ -180,7 +153,6 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
 
     for idx,name in enumerate(path):
 
-        #print(name)
         series=name.split('_')[-2]
         batch=name.split('_')[4]
         iteration=series.split('-')[-1]
@@ -228,11 +200,9 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
   
 
         #values_array = torch.cat((torch.Tensor(geometry),torch.Tensor(surfacetype),torch.Tensor(materialconductor),torch.Tensor(materialsustrato),torch.Tensor([sustratoHeight]),torch.Tensor(band)),0) #concat side
-        if parser.pred_size==1:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band,freqx_val]))
-        else:
-            arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band]))
-
+        
+        arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band]))
+    
     #embedding = torch.stack(arr)
     values_array = torch.stack(arr)
     """ Values array solo pouede llenarse con n+umero y no con textos"""
@@ -271,6 +241,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         #Loading data
         a, bands_batch, max_freqs = []    ,[],[]    
 
+        opt.zero_grad()
 
         """lookup for data corresponding to every image in training batch"""
         for name in names:
@@ -312,7 +283,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
                 #preparing data from spectra for each image
                 values=np.array(train.values.T)
-                #values=np.around(values, decimals=2, out=None)
+                values=np.around(values, decimals=2, out=None)
 
                 #get top frequencies for top values 
                 tops, indx = torch.topk(torch.from_numpy(values[1]), 3, largest=True)      
@@ -335,120 +306,66 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
 
         """Creating a conditioning vector"""
-        if parser.pred_size==1:
+
+        array=set_conditioning(bands_batch,
+                                         max_freqs,
+                                         classes, 
+                                         names, 
+                                         classes_types,
+                                         clipEmbedder,
+                                         df,
+                                         device)
+        
+        #embedded=embedded.view(parser.batch_size,parser.condition_len)
+        #embedded = embedded.mean(1)
+        """showing embedding image"""
+
+        # plot =  array.clone().detach().cpu()
+
+        # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*parser.cond_channel, bias=True)           
+        # x2 = l1(plot) #Size must be taken care = 800 in this case
+        # m = nn.Tanh()
+        # x2 = m(x2)
+        # x2 = x2.reshape(int(parser.batch_size),parser.cond_channel,parser.image_size,parser.image_size)
+        # save_image(x2[0], str(i)+'onehot_array.png')
+        # save_image(inputs[0], str(i)+'_image.png')
+
+
+        # the prediction 
+        if array.shape[1]==parser.condition_len:
+
+            #predicting
+            inv_normalize = torchvision.transforms.Normalize(
+            mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
+            std=[1/0.229, 1/0.224, 1/0.225]
+            )     
+            inputs = inv_normalize(inputs)
+            y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
+            y_predicted=y_predicted.to(device)
+
+            y_truth = torch.stack(a).to(device)
             
+            """this just in case required depending on changes applied to output vector"""
+            #y_truth =  torch.unsqueeze(y_truth, 1)
+            #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
+
+            loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
+                                                                        y_predicted,
+                                                                        y_truth, opt,
+                                                                        running_loss,
+                                                                        epoch_loss,
+                                                                        acc_train,
+                                                                        train=True)
             
-            for idx,freq in enumerate(all_frequencies):
-                
-                opt.zero_grad()
+            i += 1
 
-
-                array=set_conditioning(bands_batch,
-                                                freq,
-                                                classes, 
-                                                names, 
-                                                classes_types,
-                                                clipEmbedder,
-                                                df,
-                                                device)
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
-
-                #embedded=embedded.view(parser .batch_size,parser.condition_len)
-                #embedded = embedded.mean(1)
-                """showing embedding image"""
-
-                # plot =  array.clone().detach().cpu()
-
-                # l1 = nn.Linear(parser.condition_len, parser.image_size*parser.image_size*parser.cond_channel, bias=True)           
-                # x2 = l1(plot) #Size must be taken care = 800 in this case
-                # m = nn.Tanh()
-                # x2 = m(x2)
-                # x2 = x2.reshape(int(parser.batch_size),parser.cond_channel,parser.image_size,parser.image_size)
-                # save_image(x2[0], str(i)+'onehot_array.png')
-                # save_image(inputs[0], str(i)+'_image.png')
-
-
-                # the prediction 
-                if array.shape[1]==parser.condition_len:
-
-                    #predicting
-                    
-                    y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                    y_predicted=y_predicted.to(device)
-                    m = nn.Sigmoid()
-                    y_predicted = m(y_predicted)
-
-                    #y_predicted= torch.squeeze(y_predicted, dim=1)
-                    y_truth = torch.stack(a)[:,idx].to(device)
-                    y_truth = y_truth.unsqueeze(1)
-                    """this just in case required depending on changes applied to output vector"""
-                    #y_truth =  torch.unsqueeze(y_truth, 1)
-                    #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                    loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                                y_predicted,
-                                                                                y_truth, opt,
-                                                                                running_loss,
-                                                                                epoch_loss,
-                                                                                acc_train,
-                                                                                train=True)
-                    
-                    i += 1
-
-                    if i % 100 ==  99:    # print every X mini-batches
-                    
-                        print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                        print(f'accuracy: {acc_train/i :.3f} ')
-                        print(f'Score: {score :.3f} ')
-                        running_loss=0.0
-        else:
+            if i % 100 ==  99:    # print every X mini-batches
             
-            opt.zero_grad()
-
-            array=set_conditioning(bands_batch,
-                                            max_freqs,
-                                            classes, 
-                                            names, 
-                                            classes_types,
-                                            clipEmbedder,
-                                            df,
-                                            device)
-            
-
-
-            # the prediction 
-            if array.shape[1]==parser.condition_len:
-
-                #predicting
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
-
-                y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                y_predicted=y_predicted.to(device)
-                #m = nn.Sigmoid()
-                #y_predicted = m(y_predicted)
+                print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
+                print(f'accuracy: {acc_train/i :.3f} ')
+                print(f'Score: {score :.3f} ')
+                running_loss=0.0
                 
-                y_truth = torch.stack(a).to(device)
-                
-                """this just in case required depending on changes applied to output vector"""
-                #y_truth =  torch.unsqueeze(y_truth, 1)
-                #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
-
-                loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                            y_predicted,
-                                                                            y_truth, opt,
-                                                                            running_loss,
-                                                                            epoch_loss,
-                                                                            acc_train,
-                                                                            train=True)
-                
-                i += 1
-
-                if i % 100 ==  99:    # print every X mini-batches
-                
-                    print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/100:.3f}')
-                    print(f'accuracy: {acc_train/i :.3f} ')
-                    print(f'Score: {score :.3f} ')
-                    running_loss=0.0           
 
     #update the learning rate
     scheduler.step()
@@ -456,9 +373,7 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
     return i,epoch_loss,acc_train,score
 
-def mape_loss_fn(output, target):
-    # MAPE loss
-    return torch.mean(torch.abs((target - output) / target))
+
 
 #here we calculate loss for the training process
 def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train,train=True):
@@ -468,7 +383,7 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 
     #apply criterion
     loss = criterion(y_predicted.float(), y_truth.float())  
-    loss = loss
+    #loss = torch.sqrt(loss)
 
 
     if train:
@@ -480,17 +395,12 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 
     # Metrics
     # compute the R2 score
-    #cos = nn.CosineSimilarity(dim=0, eps=1e-6)
-    #sim = cos(y_predicted, y_truth).mean()
-    mape = mape_loss_fn(y_predicted, y_truth)
-    #print(mape)
     score = r2_score(y_predicted, y_truth)
-
-    acc_train+= mape.cpu().detach().numpy() 
+    acc_train+= score.cpu().numpy() 
 
     #Loss
     running_loss +=loss_per_batch
-    #print(running_loss)
+
     if train:
         epoch_loss+=loss_per_batch
 
@@ -545,9 +455,7 @@ def main():
     arguments()
     join_simulationData()  
 
-    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.3,features=1000, Y_prediction_size=parser.pred_size)
-    #fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
-
+    fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.3,features=1000, Y_prediction_size=100)
     fwd_test = fwd_test.to(device)
 
     print(fwd_test)
@@ -555,7 +463,7 @@ def main():
     """option of word embedding"""
     Bert=None
 
-    date="_CNN_Bands_1Ago_2e-5_100epc_h1000_f1000_64_MSE_100out"
+    date="_RESNET152_Bands_22July_2e-5_100epc_h1000_f1000_64_MSE_100out"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,
