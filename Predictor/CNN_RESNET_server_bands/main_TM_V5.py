@@ -64,25 +64,18 @@ parser = argparse.ArgumentParser()
 # DataPath="\\data\\francisco_pizarro\\jorge-cardenas\\data\\MetasufacesData\\Exports\\output\\"
 # simulationData="\\data\\francisco_pizarro\\jorge-cardenas\\data\\MetasufacesData\\DBfiles\\"
 
-boxImagesPath="../../../data/MetasufacesData/Images-512-Bands/"
+boxImagesPath="../../../data/MetasurfacesData/Images-512-Bands/"
 #boxImagesPath="../../../data/MetasufacesData/Images-512-Suband/"
-DataPath="../../../data/MetasufacesData/Exports/output/"
-simulationData="../../../data/MetasufacesData/DBfiles/"
-validationImages="../../../data/MetasufacesData/testImages/"
+DataPath="../../../data/MetasurfacesData/Exports/output/"
+simulationData="../../../data/MetasurfacesData/DBfiles/"
+validationImages="../../../data/MetasurfacesData/testImages/"
 
 #Design parameters
 Substrates={"Rogers RT/duroid 5880 (tm)":0}
 Materials={"copper":0,"pec":1}
 Surfacetypes={"Reflective":0,"Transmissive":1}
-#TargetGeometries={"circ":0,"box":1, "cross":2}
-Bands={"30-40":0,"40-50":1, "50-60":2,"60-70":3,"70-80":4, "80-90":5}
+Bands={"75-78":0}
 TargetGeometries={"circ":[1,0,0],"box":[0,1,0], "cross":[0,0,1]}
-
-#Bands={"30-40":[1,0,0,0,0,0],"40-50":[0,1,0,0,0,0], 
-#       "50-60":[0,0,1,0,0,0],"60-70":[0,0,0,1,0,0],"70-80":[0,0,0,0,1,0], 
-#       "80-90":[1,0,0,0,0,1]}
-#Height={"0.252":[1,0,0,0],"0.508":[0,1,0,0], 
-#       "0.787":[0,0,1,0],"1.575":[0,0,0,1]}
 
 def arguments():
 
@@ -101,19 +94,20 @@ def arguments():
     parser.add_argument("pred_size",type=int) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
-    parser.epochs = 20
-    parser.batch_size = 64
+    parser.epochs = 40
+    parser.batch_size = 128
     parser.workers=1
     parser.gpu_number=1
     parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
     parser.learning_rate =5e-5
+
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
-    parser.condition_len=6 #this is to be modified when training for different metrics.
+    parser.condition_len=5 #this is to be modified when training for different metrics.
     parser.resnet_arch="resnet152" #this is to be modified when training for different metrics.
-    parser.pred_size=1#this is to be modified when training for different metrics.
+    parser.pred_size=100#this is to be modified when training for different metrics.
 
     if parser.pred_size==1:
         parser.condition_len=parser.condition_len+1 #this is to be modified when training for different metrics.
@@ -128,9 +122,15 @@ def join_simulationData():
     for file in glob.glob(simulationData+"*.csv"): 
         df2 = pd.read_csv(file)
         df = pd.concat([df, df2], ignore_index=True)
+
+
     
     df.to_csv('out.csv',index=False)
     
+
+
+
+
 
 # Load Model
 def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_size=601):
@@ -146,7 +146,7 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
     #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
     opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
     criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.95)
     model.train()
     return model, opt, criterion , scheduler
 
@@ -160,10 +160,10 @@ def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_si
                                Y_prediction_size=Y_prediction_size) #size of the output vector in this case frenquency points
 
 
-    opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
+    #opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
+    opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
     criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=.95)
 
     return model, opt, criterion , scheduler
 
@@ -172,7 +172,7 @@ def get_net_CNN(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction_si
 
 
 # Conditioning
-def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,df,device):
+def set_conditioning(bands_batch,target,path,categories,clipEmbedder,df,device):
         
 
     arr=[] #intermediate array to build the batch of conditioning
@@ -182,6 +182,7 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
 
         series=name.split('_')[-2]
         batch=name.split('_')[4]
+
         if batch=="v2":
             batch=name.split('_')[5]      
         
@@ -224,21 +225,8 @@ def set_conditioning(bands_batch,freqx_val,target,path,categories,clipEmbedder,d
             #sustratoHeight = Height[str(sustratoHeight)]
             substrateWidth = 5 # 5 mm size
         
-
-        """this to apply for one hot encoding"""
-        # materialsustrato=torch.Tensor(substrate_encoder.transform(np.array(Substrates[layer['substrate']['material']]).reshape(-1, 1)).toarray()).squeeze(0)
-        # materialconductor=torch.Tensor(materials_encoder.transform(np.array(Materials[layer['conductor']['material']]).reshape(-1, 1)).toarray()).squeeze(0)
-        # surface=torch.Tensor(surfaceType_encoder.transform(np.array(Surfacetypes[surfacekey]).reshape(-1, 1)).toarray()).squeeze(0)
-        # band=torch.Tensor(bands_encoder.transform(np.array(band).reshape(-1, 1)).toarray()).squeeze(0)
-  
-
-        #values_array = torch.cat((torch.Tensor(geometry),torch.Tensor(surfacetype),torch.Tensor(materialconductor),torch.Tensor(materialsustrato),torch.Tensor([sustratoHeight]),torch.Tensor(band)),0) #concat side
-        #if parser.pred_size==1:
-        #    arr.append(torch.Tensor([geometry,surfacetype,materialconductor,materialsustrato,sustratoHeight, substrateWidth,band,freqx_val]))
-       
-        #else:
         val_arr=torch.Tensor(geometry)
-        val_arr=torch.cat((val_arr,torch.Tensor([sustratoHeight,substrateWidth,band, freqx_val])),0)
+        val_arr=torch.cat((val_arr,torch.Tensor([sustratoHeight,substrateWidth])),0)
 
         arr.append(val_arr)
 
@@ -306,34 +294,17 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                 elif Bands[str(band_name)]==1:
                     
                     train=train.loc[101:200]
-
-                elif Bands[str(band_name)]==2:
-                    if version_batch==1:
-                        train=train.loc[201:300]
-                    else:
-                        train=train.loc[1:100]
-                elif Bands[str(band_name)]==3:
-                    if version_batch==1:
-                        train=train.loc[301:400]
-                    else:
-                        train=train.loc[101:200]
-
-                elif Bands[str(band_name)]==4:
-                    if version_batch==1: 
-                        train=train.loc[401:500]
-                    else:
-                        train=train.loc[201:300]
-
-                elif Bands[str(band_name)]==5:
-
-                    train=train.loc[501:600]
                 
                 
 
                 #preparing data from spectra for each image
                 data=np.array(train.values.T)
                 values=data[1]
+                values = np.around(values, decimals=2, out=None)
+
                 all_frequencies=data[0]
+                all_frequencies = np.array([(float(i)-min(all_frequencies))/(max(all_frequencies)-min(all_frequencies)) for i in all_frequencies])
+
                 values[values<0.05]=0
                 #get top freqencies for top values 
                 data, fre_peaks,results_half, peaks = find_peaks_values(values,all_frequencies)
@@ -342,8 +313,8 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                 #labels_tensor=torch.from_numpy(values)
                 
                 #batching
+                #aa.append(torch.from_numpy(values))
                 a.append(torch.from_numpy(values))
-
                 #saving bands and frequencies 
                 bands_batch.append(Bands[band_name])
                 max_freqs.append(all_frequencies[peaks])
@@ -351,50 +322,48 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
 
 
         """Creating a conditioning vector"""
-        for idx,item in enumerate(all_frequencies):
 
-            opt.zero_grad()
+        opt.zero_grad()
 
-            array=set_conditioning(bands_batch,
-                                            item,
-                                            classes, 
-                                            names, 
-                                            classes_types,
-                                            clipEmbedder,
-                                            df,
-                                            device)
+        array=set_conditioning(bands_batch,
+                                        classes, 
+                                        names, 
+                                        classes_types,
+                                        clipEmbedder,
+                                        df,
+                                        device)
+        
+        # the prediction 
+        
             
-            # the prediction 
-            if array.shape[1]==parser.condition_len:
-                
-                array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
+        #array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
 
-                y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
-                y_predicted=y_predicted.to(device)
+        y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
+        y_predicted=y_predicted.to(device)
+        y_truth = torch.stack(a).to(device)
 
-                y_truth = torch.stack(a)[:,idx].to(device)
-                y_truth =  torch.unsqueeze(y_truth, 1)
+        #y_truth =  torch.unsqueeze(y_truth, 1)  
 
-                """this just in case required depending on changes applied to output vector"""
-                #y_truth =  torch.unsqueeze(y_truth, 1)
-                #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
+        """this just in case required depending on changes applied to output vector"""
+        #y_truth =  torch.unsqueeze(y_truth, 1)
+        #y_truth = torch.nn.functional.normalize(y_truth, p=1.0, dim=1, eps=1e-12, out=None)
 
-                
-                loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
-                                                                            y_predicted,
-                                                                            y_truth, opt,
-                                                                            running_loss,
-                                                                            epoch_loss,
-                                                                            acc_train,
-                                                                            train=True)
-                
-                i += 1
+        
+        loss_per_batch,running_loss, epoch_loss, acc_train,score = metrics(criterion,
+                                                                    y_predicted,
+                                                                    y_truth, opt,
+                                                                    running_loss,
+                                                                    epoch_loss,
+                                                                    acc_train,
+                                                                    train=True)
+        
+        i += 1
 
-                if i % 1000 ==  999:    # print every X mini-batches
+        if i % 10 ==  9:    # print every X mini-batches
 
-                    print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/10000:.3f}')
-                    print(f'accuracy: {acc_train/i :.3f} ',f' score: {score :.3f} ')
-                    running_loss=0.0           
+            print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/10000:.3f}')
+            print(f'accuracy: {acc_train/i :.3f} ',f' score: {score :.3f} ')
+            running_loss=0.0           
 
     #update the learning rate
     scheduler.step()
@@ -447,7 +416,6 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
 
     #apply criterion
     loss = criterion(y_predicted.float(), y_truth.float())
-    loss = loss*100
     if train:
         loss.backward()
         loss_per_batch=loss.item()
@@ -521,7 +489,7 @@ def main():
     join_simulationData()  
 
     #fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
-    fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1000,dropout=0.4,features=1000, Y_prediction_size=parser.pred_size)
+    fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1500,dropout=0.3,features=1500, Y_prediction_size=parser.pred_size)
 
     fwd_test = fwd_test.to(device)
 
@@ -530,7 +498,7 @@ def main():
     """option of word embedding"""
     Bert=None
 
-    date="_RESNET152_Bands_4sep_2e-5_20epc_ADAM_64_MSE_1out"
+    date="_RESNET152_Bands_5Nov_1e-5_20epc_ADAM_64_MSE_6out"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,
