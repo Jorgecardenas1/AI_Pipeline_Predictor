@@ -42,6 +42,7 @@ from tqdm.notebook import tqdm
 import argparse
 import json
 import cv2
+from matplotlib.collections import LineCollection
 
 from PIL import Image
 
@@ -99,14 +100,14 @@ def arguments():
     parser.add_argument("pred_size",type=int) #This defines the length of our conditioning vector
 
     parser.run_name = "Predictor Training"
-    parser.epochs = 20
-    parser.batch_size = 128
+    parser.epochs = 25
+    parser.batch_size = 128 #original 128
     parser.workers=1
     parser.gpu_number=1
     parser.image_size = 64
     parser.dataset_path = os.path.normpath('/content/drive/MyDrive/Training_Data/Training_lite/')
     parser.device = "cpu"
-    parser.learning_rate = 1e-4
+    parser.learning_rate = 1e-3
 
     parser.metricType='AbsorbanceTM' #this is to be modified when training for different metrics.
     parser.cond_channel=3 #this is to be modified when training for different metrics.
@@ -131,7 +132,7 @@ def join_simulationData():
 
 
 
-def get_data_with_labels(image_size,resize, randomResize, dataset_path,batch_size, drop_last):
+def get_data_with_labels(image_size, randomResize, imagesPath, dataset_path,batch_size, drop_last):
 
     transforms = torchvision.transforms.Compose([
         #torchvision.transforms.Resize(resize),  # args.image_size + 1/4 *args.image_size
@@ -140,7 +141,7 @@ def get_data_with_labels(image_size,resize, randomResize, dataset_path,batch_siz
         torchvision.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
-    df = pd.read_csv("outImages.csv")
+    df = pd.read_csv(dataset_path)
     #'path', 'class','class_target', 'freq','band'
     image_names = df["path"].values.tolist()
     targets = df["class_target"]
@@ -151,7 +152,7 @@ def get_data_with_labels(image_size,resize, randomResize, dataset_path,batch_siz
 
     frequencies = df["freq"].values.tolist()
 
-    cursomDataset = customDataset(None,image_names, targets, classes,frequencies,transforms)
+    cursomDataset = customDataset(imagesPath,image_names, targets, classes,frequencies,transforms)
     dataloader = DataLoader(cursomDataset, batch_size=batch_size, shuffle=True, drop_last=drop_last)
 
 
@@ -173,7 +174,7 @@ class customDataset(Dataset):
     def __getitem__(self, idx):
 
         image_filepath = self.names[idx]
-        path = boxImagesPath + '/'+ self.classes[idx] + '/' + image_filepath
+        path =  self.image_paths+'/'+ self.classes[idx] + '/' + image_filepath
         image = cv2.imread(path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = F.to_pil_image(image)
@@ -201,9 +202,8 @@ def get_net_resnet(device,hiden_num=1000,dropout=0.1,features=3000, Y_prediction
     
 
     opt = optimizer.Adam(model.parameters(), lr=parser.learning_rate, betas=(0.5, 0.999),weight_decay=1e-4)
-    #opt  = optimizer.SGD(model.parameters(), lr =parser.learning_rate, momentum=0.9,weight_decay=1e-4)
     criterion=nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.999)
     model.train()
     return model, opt, criterion , scheduler
 
@@ -307,13 +307,13 @@ def encoders(dictionary):
     enc.fit(index)
     return enc
 
-def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedder,df):
+def epoch_train(epoch,model,dataloader,validation_dataloader,device,opt,scheduler,criterion,clipEmbedder,df):
     i=0 #iteration
     running_loss = 0. 
     epoch_loss = 0.
     acc_train=0.0
-    bands_batch=[]
-
+    score=0.0
+    
     print('Epoch {}/{}'.format(epoch, parser.epochs - 1))
     print('-' * 10)
     
@@ -321,16 +321,14 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         
         inputs, classes, names, classes_types , frequencies= data
         
-        #sending to CUDA
         opt.zero_grad()
 
         inputs = inputs.to(device) #images
         classes =classes.to(device) #categories
         frequencies = frequencies.to(device)
         eval_name = ""
-        #Loading data
-        a, aa, max_freqs = [] ,[],[]    
 
+        a, aa = [] ,[]
 
         """lookup for data corresponding to every image in training batch"""
         for index,name in enumerate(names):
@@ -373,12 +371,13 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                 aa.append(torch.from_numpy(values))
                 a.append(torch.tensor(values[frequency], dtype=torch.float))
 
+       
         """Creating a conditioning vector"""
 
         array=set_conditioning(classes, names, classes_types,frequencies,df)
-        # the prediction 
         array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
 
+        """Prediction"""
         y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
         y_predicted=y_predicted.to(device)
         y_predicted = torch.flatten(y_predicted)
@@ -396,23 +395,65 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
                                                                     epoch_loss,
                                                                     acc_train,
                                                                     train=True)
-    
+        acc_train = acc_train+score
+
         i += 1
 
         if i % 1000 ==  999:    # print every X mini-batches
 
-            print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/10000:.3f}')
+            print(f'[{epoch + 1}, {i :5d}] loss: {loss_per_batch/y_truth.size(0):.3f} running loss:  {running_loss/10000:.3f} iter loss:  {running_loss/i:.3f}')
             print(f'accuracy: {acc_train/i :.3f} ',f' score: {score :.3f} ')
             running_loss=0.0           
 
-        
+    """"Evaluation"""
     with torch.no_grad():
+        
         predicted = []
+        a, aa = [] ,[]
+
+        inputs, classes, names, classes_types , frequencies= data = next(iter(validation_dataloader))
+        inputs = inputs.to(device) #images
+        classes =classes.to(device) #categories
+        frequencies = frequencies.to(device)
+        
+        
+        for index,name in enumerate(names):
+
+            series=name.split('_')[-2]# getting series and batches names 
+            band_name=name.split('_')[-1].split('.')[0]# Getting the band for the corresponding image
+            batch=name.split('_')[4]
+            version_batch=1
+            frequency =  frequencies[index]
+
+            if batch=="v2":
+                version_batch=2
+                batch=name.split('_')[5]
+
+            for name in glob.glob(DataPath+batch+'/files/'+'/'+parser.metricType+'*'+series+'.csv'): 
+                
+                #loading the absorption data
+                train = pd.read_csv(name)
+
+                # # the band is divided in chunks 
+                if Bands[str(band_name)]==0:
+                
+                    train=train.loc[1:100]
+
+                elif Bands[str(band_name)]==1:
+                    
+                    train=train.loc[101:200]
+
+                data=np.array(train.values.T)
+                values=data[1]
+                values = np.around(values, decimals=2, out=None)
+
+                aa.append(torch.from_numpy(values))
+        
         for freq in range(0,100):
 
             array=set_conditioning(classes, names, classes_types,torch.full((parser.batch_size,), freq),df)
-            # the prediction 
             array = torch.nn.functional.normalize(array, p=2.0, dim = 1)
+            
             y_predicted=model(input_=inputs, conditioning=array.to(device) ,b_size=inputs.shape[0])
             predicted.append(y_predicted)
 
@@ -420,9 +461,16 @@ def epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedd
         predict = torch.transpose(predict[:,:,0],0,1)   
         aa =  torch.stack(aa).to(device)
 
-        plt.plot(range(0,100),predict[parser.batch_size-1].cpu().detach().numpy())
-        plt.plot(range(0,100),aa[parser.batch_size-1].cpu().detach().numpy(), color="red")
-        plt.savefig("./output/"+batch+"_"+series+"_"+str(epoch)+".png")
+        f = plt.figure(figsize=(10,50))
+        fig, axs= plt.subplots(10, 1,figsize=(4,20),) 
+        plt.subplots_adjust( bottom=0.1, top=0.9, wspace=0.4,hspace=0.4)
+        counter=0
+        for ax in axs:
+            ax.plot(range(0,100), predict[counter].cpu().detach().numpy(),color="salmon")
+            ax.plot(range(0,100), aa[counter].cpu().detach().numpy(),"-0", color='royalblue')
+            counter=counter+1
+
+        plt.savefig("./output_20Nov/"+batch+"_"+series+"_"+str(epoch)+".png")
         plt.clf()
         del predict, y_predicted, predicted
 
@@ -484,13 +532,6 @@ def metrics(criterion,y_predicted,y_truth, opt,running_loss,epoch_loss,acc_train
     else:
         loss_per_batch=loss.item()
 
-    # Metrics
-    # compute the R2 score
-
-
-    #mape = mape_loss_fn(y_predicted, y_truth)
-    #print(mape)
-
     score = r2_score(y_predicted, y_truth)
 
     acc_train+= 0
@@ -523,17 +564,24 @@ def train(opt,scheduler,criterion,model, clipEmbedder,device, PATH):
     #                                            filter="30-40")#filter disabled
     
     dataloader = get_data_with_labels(parser.image_size,
-                                      parser.image_size,
                                       1, 
-                                      boxImagesPath,parser.batch_size,
+                                      boxImagesPath,
+                                      "outImages.csv",
+                                      parser.batch_size,
                                       drop_last=True)
 
+    validation_dataloader = get_data_with_labels(parser.image_size,
+                                      1,
+                                      validationImages,
+                                      "outImagesValidation.csv",
+                                      10,
+                                      drop_last=True)
     for epoch in range(parser.epochs):
         #load images data
        
         model.train() #in case required for validation
 
-        total,epoch_loss,acc_train,score_train=epoch_train(epoch,model,dataloader,device,opt,scheduler,criterion,clipEmbedder,df)
+        total,epoch_loss,acc_train,score_train=epoch_train(epoch,model,dataloader,validation_dataloader,device,opt,scheduler,criterion,clipEmbedder,df)
 
         print("epoch_loss: ",epoch_loss/total)
         loss_values.append(epoch_loss/total )
@@ -555,9 +603,9 @@ def main():
 
     arguments()
     join_simulationData()  
+    
     fwd_test, opt, criterion,scheduler=get_net_resnet(device,hiden_num=1000,dropout=0.3,features=1000, Y_prediction_size=parser.pred_size)
     #fwd_test, opt, criterion,scheduler=get_net_CNN(device,hiden_num=1500,dropout=0.3,features=1500, Y_prediction_size=parser.pred_size)
-
     fwd_test = fwd_test.to(device)
 
     print(fwd_test)
@@ -565,7 +613,7 @@ def main():
     """option of word embedding"""
     Bert=None
 
-    date="_RESNET152_Bands_11Nov_1e-4_20epc_ADAM_64_MSE_1out"
+    date="_RESNET152_Bands_20Nov_1e-3_25epc_ADAM_64_MSE_batch128_0.999_1out"
     PATH = 'trainedModelTM_abs_'+date+'.pth'
 
     loss_values,acc,valid_loss_list,acc_val,score_train=train(opt,
@@ -579,29 +627,29 @@ def main():
     torch.save(fwd_test.state_dict(), PATH)
 
     try:
-        np.savetxt('output/loss_Train_TM_'+date+'.out', loss_values, delimiter=',')
+        np.savetxt('output_20Nov/loss_Train_TM_'+date+'.out', loss_values, delimiter=',')
     except:
-        np.savetxt('output/loss_Train_TM_'+date+'.out', [], delimiter=',')
+        np.savetxt('output_20Nov/loss_Train_TM_'+date+'.out', [], delimiter=',')
 
     try:
-        np.savetxt('output/acc_Train_TM_'+date+'.out', acc, delimiter=',')
+        np.savetxt('output_20Nov/acc_Train_TM_'+date+'.out', acc, delimiter=',')
     except:
-        np.savetxt('output/acc_Train_TM_'+date+'.out', [], delimiter=',')
+        np.savetxt('output_20Nov/acc_Train_TM_'+date+'.out', [], delimiter=',')
     
     try:
-        np.savetxt('output/loss_Valid_TM_'+date+'.out', valid_loss_list, delimiter=',')
+        np.savetxt('output_20Nov/loss_Valid_TM_'+date+'.out', valid_loss_list, delimiter=',')
     except:
-        np.savetxt('output/loss_Valid_TM_'+date+'.out', [], delimiter=',')
+        np.savetxt('output_20Nov/loss_Valid_TM_'+date+'.out', [], delimiter=',')
     
     try:
-        np.savetxt('output/acc_val_'+date+'.out', acc_val, delimiter=',')
+        np.savetxt('output_20Nov/acc_val_'+date+'.out', acc_val, delimiter=',')
     except:
-        np.savetxt('output/acc_val_'+date+'.out', [], delimiter=',')
+        np.savetxt('output_20Nov/acc_val_'+date+'.out', [], delimiter=',')
 
     try:
-        np.savetxt('output/score_train_'+date+'.out', score_train, delimiter=',')
+        np.savetxt('output_20Nov/score_train_'+date+'.out', score_train, delimiter=',')
     except:
-        np.savetxt('output/score_train_'+date+'.out', [], delimiter=',')
+        np.savetxt('output_20Nov/score_train_'+date+'.out', [], delimiter=',')
 
 if __name__ == "__main__":
     main()
